@@ -1,104 +1,83 @@
 # 咸鱼自动化工具
 
-一个全面的咸鱼电商自动化工具，帮助卖家提高效率和销售业绩。
+基于需求分析文档开发的咸鱼平台自动化工具，包含商品管理、订单处理、客户服务等多个自动化模块。
 
 ## 功能特点
 
-- **商品管理自动化**：批量上下架、信息更新、爆品采集
-- **订单处理自动化**：自动发货、订单状态管理、辅助拍单
-- **客户服务自动化**：智能回复、客户关系管理、文案优化
-- **平台任务自动化**：日常任务处理、店铺数据分析、自动擦亮
-- **内容创作与素材管理**：主图制作、去水印、素材管理
-- **多账号管理**：多号发布、发布控制、账号克隆
-- **高级营销分析**：热销商品发掘、转化率分析、智能矩阵上架
+- 商品管理自动化：批量上下架、商品信息更新、爆品采集等
+- 订单处理自动化：自动发货、订单状态管理等
+- 客户服务自动化：自动回复系统、客户关系管理等
+- 平台任务自动化：日常任务处理、店铺数据分析等
+- 内容创作与素材管理：主图制作、去水印、素材管理等
+- 多账号管理：多号发布、账号克隆等
+- 高级营销分析：热销商品发掘、转化率分析等
 
-## 系统要求
+## 技术栈
 
-- Linux系统（推荐Ubuntu 20.04+）
-- Python 3.8+
+- 后端：Python + Flask + MongoDB
+- 前端：Vue.js + Element UI
+- 自动化：Playwright
+
+## 安装部署
+
+### 系统要求
+
+- 操作系统：Ubuntu/Debian 或 CentOS/RHEL
+- Python 3.7+
+- Node.js 12+
 - MongoDB 4.4+
-- Node.js 14+
-- Nginx
 
-## 一键部署
+### 一键部署
 
-1. 登录您的腾讯云服务器
-2. 下载部署脚本：
-   ```
-   curl -O https://raw.githubusercontent.com/your-username/xianyu-tool/master/deploy.sh
-   ```
-3. 添加执行权限：
-   ```
-   chmod +x deploy.sh
-   ```
-4. 以root权限运行脚本：
-   ```
-   sudo ./deploy.sh
-   ```
-5. 等待部署完成，按照提示访问系统
+使用部署脚本进行快速部署：
 
-## 手动部署
+```bash
+sudo bash deploy.sh
+```
 
-### 后端部署
+### 手动部署
 
-1. 克隆代码库：
-   ```
-   git clone https://github.com/your-username/xianyu-tool.git
-   cd xianyu-tool
-   ```
+1. 安装依赖
 
-2. 安装Python依赖：
-   ```
-   pip install -r requirements.txt
-   ```
+```bash
+# 安装Python依赖
+pip3 install -r requirements.txt
+pip3 install playwright
+python3 -m playwright install chromium
 
-3. 安装Playwright并下载浏览器：
-   ```
-   pip install playwright
-   python -m playwright install chromium
-   ```
+# 安装前端依赖并构建
+cd frontend
+npm install
+npm run build
+cd ..
+```
 
-4. 初始化数据库：
-   ```
-   python init_db.py
-   ```
+2. 配置数据库
 
-5. 启动后端服务：
-   ```
-   python app.py
-   ```
+```bash
+python3 init_db.py
+```
 
-### 前端部署
+3. 启动服务
 
-1. 进入前端目录：
-   ```
-   cd frontend
-   ```
+```bash
+python3 app.py
+```
 
-2. 安装依赖：
-   ```
-   npm install
-   ```
+## 使用说明
 
-3. 构建生产环境版本：
-   ```
-   npm run build
-   ```
+1. 访问 http://服务器IP 打开系统
+2. 默认管理员账号：admin
+3. 默认管理员密码：admin123
+4. 登录后请立即修改密码
 
-4. 配置Nginx（参考deploy.sh中的配置）
+## 开发团队
 
-## 访问系统
-
-部署完成后，访问 `http://服务器IP` 即可打开系统。
-
-初始管理员账号：
-- 用户名：admin
-- 密码：admin123
-
-## 安全提示
-
-首次登录后，请立即修改默认密码！
+- 产品设计：XXX
+- 前端开发：XXX
+- 后端开发：XXX
+- 测试与部署：XXX
 
 ## 许可证
 
-本项目遵循MIT许可证 
+MIT License 
