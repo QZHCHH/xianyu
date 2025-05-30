@@ -12,7 +12,7 @@ def init_db():
     
     # 连接数据库
     client = MongoClient('mongodb://localhost:27017/')
-    db = client['xianyu_tool']
+    db = client['xianyu_tool_auto']
     
     # 创建用户集合
     if 'users' not in db.list_collection_names():
