@@ -8,7 +8,12 @@ import uuid
 import pandas as pd
 from datetime import datetime, timedelta
 from flask import jsonify
-from playwright.sync_api import sync_playwright, TimeoutError
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutError
 import threading
 import time
 from bson import ObjectId
@@ -24,8 +29,12 @@ class ProductManager:
         """获取浏览器实例，懒加载模式"""
         with self.browser_lock:
             if self.browser is None:
-                playwright = sync_playwright().start()
-                self.browser = playwright.chromium.launch(headless=True)
+                # 使用selenium替代playwright
+                chrome_options = Options()
+                chrome_options.add_argument("--headless")
+                chrome_options.add_argument("--no-sandbox")
+                chrome_options.add_argument("--disable-dev-shm-usage")
+                self.browser = webdriver.Chrome(options=chrome_options)
             return self.browser
     
     def get_products(self, username):

@@ -8,7 +8,11 @@ import base64
 from flask import jsonify
 from datetime import datetime
 from bson import ObjectId
-from playwright.sync_api import sync_playwright
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 import threading
 import time
 
@@ -22,8 +26,11 @@ class OrderProcessor:
         """获取浏览器实例，懒加载模式"""
         with self.browser_lock:
             if self.browser is None:
-                playwright = sync_playwright().start()
-                self.browser = playwright.chromium.launch(headless=True)
+                chrome_options = Options()
+                chrome_options.add_argument("--headless")
+                chrome_options.add_argument("--no-sandbox")
+                chrome_options.add_argument("--disable-dev-shm-usage")
+                self.browser = webdriver.Chrome(options=chrome_options)
             return self.browser
     
     def get_orders(self, username):
