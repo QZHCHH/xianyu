@@ -20,6 +20,8 @@ from modules.platform_tasks import PlatformTasks
 from modules.content_creator import ContentCreator
 from modules.account_manager import AccountManager
 from modules.marketing_analyzer import MarketingAnalyzer
+from modules.user_logger import UserLogger
+from modules.auth_manager import AuthManager
 
 # 配置应用
 app = Flask(__name__)
@@ -45,6 +47,12 @@ app.logger.setLevel(logging.INFO)
 client = MongoClient('mongodb://localhost:27017/')
 db = client['xianyu_tool_auto']
 
+# 初始化用户日志模块
+user_logger = UserLogger(db)
+
+# 初始化权限管理模块
+auth_manager = AuthManager(db, user_logger)
+
 # 初始化各模块
 product_manager = ProductManager(db)
 order_processor = OrderProcessor(db)
@@ -64,46 +72,144 @@ def login():
     username = data.get('username')
     password = data.get('password')
     
-    user = db.users.find_one({'username': username})
+    # 获取客户端IP
+    ip_address = request.remote_addr
+    if request.headers.get('X-Forwarded-For'):
+        ip_address = request.headers.get('X-Forwarded-For').split(',')[0].strip()
     
-    if not user or not check_password_hash(user['password'], password):
-        return jsonify({'success': False, 'message': '用户名或密码错误'}), 401
+    # 使用权限管理模块进行登录
+    login_result = auth_manager.login(username, password, ip_address)
     
+    if not login_result['success']:
+        return jsonify(login_result), 401
+    
+    # 生成JWT令牌
     access_token = create_access_token(identity=username)
-    return jsonify({'success': True, 'token': access_token, 'user': {
-        'username': user['username'],
-        'role': user['role'],
-        'id': str(user['_id'])
-    }})
+    
+    # 返回用户信息和令牌
+    return jsonify({
+        'success': True,
+        'token': access_token,
+        'user': login_result['user']
+    })
 
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.json
     username = data.get('username')
     password = data.get('password')
+    email = data.get('email')
     
-    if db.users.find_one({'username': username}):
-        return jsonify({'success': False, 'message': '用户名已存在'}), 400
+    # 使用权限管理模块进行注册
+    register_result = auth_manager.register(username, password, email)
     
-    user_id = db.users.insert_one({
-        'username': username,
-        'password': generate_password_hash(password),
-        'role': 'user',
-        'created_at': datetime.now()
-    }).inserted_id
+    if not register_result['success']:
+        return jsonify(register_result), 400
     
+    # 生成JWT令牌
     access_token = create_access_token(identity=username)
-    return jsonify({'success': True, 'token': access_token, 'user': {
-        'username': username,
-        'role': 'user',
-        'id': str(user_id)
-    }})
+    
+    # 返回用户信息和令牌
+    return jsonify({
+        'success': True,
+        'token': access_token,
+        'user': {
+            'username': username,
+            'role': 'user',
+            'id': register_result['user_id'],
+            'permissions': auth_manager.get_permissions('user')
+        }
+    })
+
+@app.route('/api/password/change', methods=['POST'])
+@jwt_required()
+def change_password():
+    username = get_jwt_identity()
+    data = request.json
+    old_password = data.get('old_password')
+    new_password = data.get('new_password')
+    
+    # 使用权限管理模块修改密码
+    result = auth_manager.change_password(username, old_password, new_password)
+    
+    if not result['success']:
+        return jsonify(result), 400
+        
+    return jsonify(result)
+
+@app.route('/api/users/role', methods=['PUT'])
+@jwt_required()
+def update_user_role():
+    admin_username = get_jwt_identity()
+    data = request.json
+    target_username = data.get('username')
+    new_role = data.get('role')
+    
+    # 使用权限管理模块更新用户角色
+    result = auth_manager.update_user_role(admin_username, target_username, new_role)
+    
+    if not result['success']:
+        return jsonify(result), 403
+        
+    return jsonify(result)
+
+@app.route('/api/logs', methods=['GET'])
+@jwt_required()
+def get_user_logs():
+    username = get_jwt_identity()
+    
+    # 检查权限
+    if not auth_manager.has_permission(username, 'log_view'):
+        return jsonify({
+            'success': False,
+            'message': '权限不足'
+        }), 403
+    
+    # 获取查询参数
+    target_username = request.args.get('username')
+    action_type = request.args.get('action_type')
+    target_type = request.args.get('target_type')
+    start_date_str = request.args.get('start_date')
+    end_date_str = request.args.get('end_date')
+    limit = int(request.args.get('limit', 100))
+    skip = int(request.args.get('skip', 0))
+    
+    # 转换日期
+    start_date = None
+    end_date = None
+    
+    if start_date_str:
+        try:
+            start_date = datetime.fromisoformat(start_date_str)
+        except ValueError:
+            pass
+            
+    if end_date_str:
+        try:
+            end_date = datetime.fromisoformat(end_date_str)
+        except ValueError:
+            pass
+    
+    # 获取日志
+    logs = user_logger.get_audit_logs(
+        username, target_username, action_type,
+        start_date, end_date, limit, skip
+    )
+    
+    return jsonify({
+        'success': True,
+        'logs': logs
+    })
 
 # 产品管理API路由
 @app.route('/api/products', methods=['GET'])
 @jwt_required()
 def get_products():
     username = get_jwt_identity()
+    
+    # 记录日志
+    user_logger.log_action(username, 'view', 'products')
+    
     return product_manager.get_products(username)
 
 @app.route('/api/products', methods=['POST'])
@@ -111,34 +217,131 @@ def get_products():
 def add_product():
     username = get_jwt_identity()
     data = request.json
-    return product_manager.add_product(username, data)
+    
+    # 检查权限
+    if not auth_manager.has_permission(username, 'product_edit'):
+        return jsonify({
+            'success': False,
+            'message': '权限不足'
+        }), 403
+    
+    result = product_manager.add_product(username, data)
+    
+    # 记录日志
+    response_data = json.loads(result.get_data(as_text=True))
+    if response_data.get('success'):
+        user_logger.log_action(
+            username, 'add', 'product',
+            target_id=response_data.get('product_id'),
+            details={'title': data.get('title')}
+        )
+    
+    return result
 
 @app.route('/api/products/<product_id>', methods=['PUT'])
 @jwt_required()
 def update_product(product_id):
     username = get_jwt_identity()
     data = request.json
-    return product_manager.update_product(username, product_id, data)
+    
+    # 检查权限
+    if not auth_manager.has_permission(username, 'product_edit'):
+        return jsonify({
+            'success': False,
+            'message': '权限不足'
+        }), 403
+    
+    result = product_manager.update_product(username, product_id, data)
+    
+    # 记录日志
+    response_data = json.loads(result.get_data(as_text=True))
+    if response_data.get('success'):
+        user_logger.log_action(
+            username, 'update', 'product',
+            target_id=product_id,
+            details={'title': data.get('title')}
+        )
+    
+    return result
 
 @app.route('/api/products/<product_id>', methods=['DELETE'])
 @jwt_required()
 def delete_product(product_id):
     username = get_jwt_identity()
-    return product_manager.delete_product(username, product_id)
+    
+    # 检查权限
+    if not auth_manager.has_permission(username, 'product_edit'):
+        return jsonify({
+            'success': False,
+            'message': '权限不足'
+        }), 403
+    
+    # 获取商品信息用于日志记录
+    product = db.products.find_one({'_id': uuid.UUID(product_id)})
+    product_title = product.get('title') if product else None
+    
+    result = product_manager.delete_product(username, product_id)
+    
+    # 记录日志
+    response_data = json.loads(result.get_data(as_text=True))
+    if response_data.get('success'):
+        user_logger.log_action(
+            username, 'delete', 'product',
+            target_id=product_id,
+            details={'title': product_title}
+        )
+    
+    return result
 
 @app.route('/api/products/upload', methods=['POST'])
 @jwt_required()
 def upload_products():
     username = get_jwt_identity()
+    
+    # 检查权限
+    if not auth_manager.has_permission(username, 'product_edit'):
+        return jsonify({
+            'success': False,
+            'message': '权限不足'
+        }), 403
+    
     file = request.files['file']
-    return product_manager.import_products(username, file)
+    result = product_manager.import_products(username, file)
+    
+    # 记录日志
+    response_data = json.loads(result.get_data(as_text=True))
+    if response_data.get('success'):
+        user_logger.log_action(
+            username, 'import', 'products',
+            details={'count': response_data.get('count'), 'filename': file.filename}
+        )
+    
+    return result
 
 @app.route('/api/products/batch/publish', methods=['POST'])
 @jwt_required()
 def batch_publish():
     username = get_jwt_identity()
+    
+    # 检查权限
+    if not auth_manager.has_permission(username, 'product_edit'):
+        return jsonify({
+            'success': False,
+            'message': '权限不足'
+        }), 403
+    
     data = request.json
-    return product_manager.batch_publish(username, data)
+    result = product_manager.batch_publish(username, data)
+    
+    # 记录日志
+    response_data = json.loads(result.get_data(as_text=True))
+    if response_data.get('success'):
+        user_logger.log_action(
+            username, 'publish', 'products',
+            details={'count': len(data.get('product_ids', []))}
+        )
+    
+    return result
 
 @app.route('/api/products/hot', methods=['GET'])
 @jwt_required()
@@ -464,5 +667,197 @@ def get_region(account_id=None):
     username = get_jwt_identity()
     return platform_tasks.get_region(username, account_id)
 
+# 添加用户管理路由
+@app.route('/api/users', methods=['GET'])
+@jwt_required()
+def get_users():
+    username = get_jwt_identity()
+    
+    # 检查权限
+    if not auth_manager.has_permission(username, 'user_manage'):
+        return jsonify({
+            'success': False,
+            'message': '权限不足'
+        }), 403
+    
+    # 获取查询参数
+    role = request.args.get('role')
+    status = request.args.get('status')
+    
+    # 构建查询条件
+    query = {}
+    if role:
+        query['role'] = role
+    if status:
+        query['status'] = status
+    
+    # 执行查询
+    users = list(db.users.find(query, {'password': 0}))
+    
+    # 处理ObjectId
+    for user in users:
+        user['_id'] = str(user['_id'])
+    
+    # 记录日志
+    user_logger.log_action(
+        username, 'view', 'users',
+        details={'count': len(users)}
+    )
+    
+    return jsonify({
+        'success': True,
+        'users': users
+    })
+
+@app.route('/api/users/<user_id>', methods=['GET'])
+@jwt_required()
+def get_user(user_id):
+    username = get_jwt_identity()
+    
+    # 检查权限
+    if not auth_manager.has_permission(username, 'user_manage') and username != user_id:
+        return jsonify({
+            'success': False,
+            'message': '权限不足'
+        }), 403
+    
+    # 查询用户
+    user = db.users.find_one({'_id': uuid.UUID(user_id)}, {'password': 0})
+    
+    if not user:
+        return jsonify({
+            'success': False,
+            'message': '用户不存在'
+        }), 404
+    
+    # 处理ObjectId
+    user['_id'] = str(user['_id'])
+    
+    # 记录日志
+    user_logger.log_action(
+        username, 'view', 'user',
+        target_id=user_id
+    )
+    
+    return jsonify({
+        'success': True,
+        'user': user
+    })
+
+@app.route('/api/users/<user_id>', methods=['PUT'])
+@jwt_required()
+def update_user(user_id):
+    username = get_jwt_identity()
+    
+    # 检查权限
+    if not auth_manager.has_permission(username, 'user_manage') and username != user_id:
+        return jsonify({
+            'success': False,
+            'message': '权限不足'
+        }), 403
+    
+    data = request.json
+    
+    # 不允许普通用户修改自己的角色
+    if username == user_id and 'role' in data and not auth_manager.has_permission(username, 'user_manage'):
+        return jsonify({
+            'success': False,
+            'message': '权限不足，无法修改角色'
+        }), 403
+    
+    # 更新用户信息
+    update_data = {
+        'updated_at': datetime.now()
+    }
+    
+    allowed_fields = ['email', 'status']
+    if auth_manager.has_permission(username, 'user_manage'):
+        allowed_fields.extend(['role'])
+    
+    for field in allowed_fields:
+        if field in data:
+            update_data[field] = data[field]
+    
+    db.users.update_one(
+        {'_id': uuid.UUID(user_id)},
+        {'$set': update_data}
+    )
+    
+    # 记录日志
+    user_logger.log_action(
+        username, 'update', 'user',
+        target_id=user_id,
+        details=update_data
+    )
+    
+    return jsonify({
+        'success': True,
+        'message': '用户信息更新成功'
+    })
+
+@app.route('/api/users/<user_id>', methods=['DELETE'])
+@jwt_required()
+def delete_user(user_id):
+    username = get_jwt_identity()
+    
+    # 检查权限
+    if not auth_manager.has_permission(username, 'user_manage'):
+        return jsonify({
+            'success': False,
+            'message': '权限不足'
+        }), 403
+    
+    # 不允许删除自己
+    if username == user_id:
+        return jsonify({
+            'success': False,
+            'message': '不能删除自己的账号'
+        }), 400
+    
+    # 获取用户信息用于日志记录
+    user = db.users.find_one({'_id': uuid.UUID(user_id)})
+    if not user:
+        return jsonify({
+            'success': False,
+            'message': '用户不存在'
+        }), 404
+    
+    # 删除用户
+    db.users.delete_one({'_id': uuid.UUID(user_id)})
+    
+    # 记录日志
+    user_logger.log_action(
+        username, 'delete', 'user',
+        target_id=user_id,
+        details={'deleted_username': user.get('username')}
+    )
+    
+    return jsonify({
+        'success': True,
+        'message': '用户删除成功'
+    })
+
+@app.route('/api/users/permissions', methods=['GET'])
+@jwt_required()
+def get_user_permissions():
+    username = get_jwt_identity()
+    
+    # 获取用户角色
+    user = db.users.find_one({'username': username})
+    if not user:
+        return jsonify({
+            'success': False,
+            'message': '用户不存在'
+        }), 404
+    
+    # 获取权限列表
+    permissions = auth_manager.get_permissions(user['role'])
+    
+    return jsonify({
+        'success': True,
+        'role': user['role'],
+        'permissions': permissions
+    })
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False) 
+    app.run(host='0.0.0.0', port=5000, debug=True) 
